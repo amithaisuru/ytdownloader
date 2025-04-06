@@ -8,7 +8,6 @@
 </head>
 <body>
     <h2>Youtube Downloader</h2>
-    <p>Welcome to downloader</p>
     <div class="tab">
         <button class="tablinks" onclick="openTab(event, 'Audio')">Youtube to MP3</button>
         <button class="tablinks" onclick="openTab(event, 'Video')">Youtube to MP4</button>
@@ -17,7 +16,7 @@
     <!-- audio section -->
     <div id="Audio" class="tabcontent">
         <h3>Audio Download</h3>
-        <form action="{{ url_for('download_audio')}}" method="post">
+        <form action="{{ url_for('download_audio' )}}" method="post">
             <label for="url">Youtube URL:</label><br>
             <input type="text" id="url" name="url" placeholder="Enter URL Here"><br><br>
             <input type="submit" value="Download MP3">
@@ -27,7 +26,14 @@
     <!-- video section -->
     <div id="Video" class="tabcontent">
         <h3>video downloader</h3>
+        <form action="{{ url_for('download_audio' )}}">
+            <label for="url">Youtube URL:</label><br>
+            <input type="text" id="url" name="url" placeholder="Enter URL Here"><br><br>
+            <input type="submit" value="Download MP4">
+        </form>
     </div>
+
+
     <script src="{{url_for('static', filename='script.js')}}"></script> 
 </body>
 </html>

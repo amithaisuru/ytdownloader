@@ -13,7 +13,7 @@ def home():
 def download_audio():
     url = request.form.get('url')
     if not url:
-        return "No URL provided", 400
+        return "No URL provided. Please enter a valid YouTube link.", 400
     
     ydl_opts = {
         'format': 'bestaudio',
@@ -35,7 +35,31 @@ def download_audio():
             # os.remove(filename)
             return response
     except Exception as e:
-        return f"An error occurred: {str(e)}", 500
+        return f"Error downloading audio: {str(e)}", 500
+
+@app.route('/download_video', methods=['POST'])
+def download_video():
+    url = request.form.get('url')
+    if not url:
+        return "No URL provided. Please enter a valid YouTube link.", 400
+    
+    ydl_opts = {
+        'format': 'bestvideo[height<=720]+bestaudio/best[height<=720]',  # 720p video + audio
+        'merge_output_format': 'mp4', 
+        'outtmpl': 'downloads/%(title)s.%(ext)s',
+    }
+
+    try:
+        os.makedirs('downloads', exist_ok=True)
+        #download and convert he audio
+        with yt_dlp.YoutubeDL(ydl_opts) as ydl:
+            info = ydl.extract_info(url, download=True) # Download and get video info
+            filename = ydl.prepare_filename(info)
+            response = send_file(filename, as_attachment=True)
+            # os.remove(filename)
+            return response
+    except Exception as e:
+        return f"Error downloading video: {str(e)}", 500
     
 if __name__ == '__main__':
     app.run(debug=True, host='0.0.0.0', port=5000)
