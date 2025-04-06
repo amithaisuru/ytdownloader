@@ -14,12 +14,20 @@
         <button class="tablinks" onclick="openTab(event, 'Video')">Youtube to MP4</button>
     </div>
 
+    <!-- audio section -->
     <div id="Audio" class="tabcontent">
-        <h3>audio downloader</h3>
+        <h3>Audio Download</h3>
+        <form action="{{ url_for('download_audio')}}" method="post">
+            <label for="url">Youtube URL:</label><br>
+            <input type="text" id="url" name="url" placeholder="Enter URL Here"><br><br>
+            <input type="submit" value="Download MP3">
+        </form>
     </div>
+
+    <!-- video section -->
     <div id="Video" class="tabcontent">
         <h3>video downloader</h3>
     </div>
-    <script src="{{url_for('static', filename='script.js')}}"></script>
+    <script src="{{url_for('static', filename='script.js')}}"></script> 
 </body>
 </html>
