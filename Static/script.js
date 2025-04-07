@@ -28,6 +28,7 @@ function updateBitrate() {
 
     options[format].forEach(b => {
         let option = document.createElement('option');
+        option.value = b
         option.text = `${b} kbps`;
         bitrate.appendChild(option);
     });

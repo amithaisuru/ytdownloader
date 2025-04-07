@@ -13,16 +13,27 @@ AUDIO_FORMATS = {
 }
 
 VIDEO_FORMATS = ['mp4', 'webm', 'mkv']
+RESOLUTIONS = {
+    '4k': '2160', '2k': '1440', '1080p': '1080', '720p': '720',
+    '480p': '480', '360p': '360', '244p': '240', '144p': '144'
+}
 
 @app.route('/')
 def home():
-    return render_template('index.html', audio_formats=AUDIO_FORMATS, video_formats=VIDEO_FORMATS)
+    return render_template(
+        'index.html',
+        audio_formats=AUDIO_FORMATS,
+        video_formats=VIDEO_FORMATS,
+        resolutions = RESOLUTIONS.keys()
+    )
 
 @app.route('/download_audio', methods=['POST'])
 def download_audio():
     url = request.form.get('url')
     format_type = request.form.get('format')
     bitrate = request.form.get('bitrate')
+    start_time = request.form.get('start_time', '')
+    end_time = request.form.get('end_time', '')
 
     if not url or not format_type or not bitrate:
         return "Missing required fields. Please fill out all options.", 400
@@ -39,6 +50,10 @@ def download_audio():
         }],
         'outtmpl': 'downloads/%(title)s.%(ext)s',
     }
+
+    if start_time and end_time and 'playlist' not in url.lower():
+        ydl_opts['postprocessor_args'] = ['-ss', start_time, '-to', end_time]
+
     try:
         os.makedirs('downloads', exist_ok=True)
         #download and convert he audio
@@ -56,27 +71,42 @@ def download_audio():
 def download_video():
     url = request.form.get('url')
     format_type = request.form.get('format')
+    resolution = request.form.get('resolution')
+    mute = request.form.get('mute', 'off') == 'on'
 
-    if not url or not format_type:
+    if not url or not format_type or not resolution:
         return "Missing required fields. Please fill out all options.", 400
-    if format_type not in VIDEO_FORMATS:
+    if format_type not in VIDEO_FORMATS or resolution not in RESOLUTIONS:
         return "Invalid format selected.", 400
     
     ydl_opts = {
-        'format': 'bestvideo[height<=720]+bestaudio/best[height<=720]',  # 720p video + audio
-        'merge_output_format': format_type, 
+        'format': f'bestvideo[height<={RESOLUTIONS[resolution]}]+bestaudio/best[height<={RESOLUTIONS[resolution]}]',
+        'merge_output_format': format_type,
         'outtmpl': 'downloads/%(title)s.%(ext)s',
     }
 
+    if mute:
+        ydl_opts['format'] = f'bestvideo[height<={RESOLUTIONS[resolution]}]'
+        ydl_opts['postprocessors'] = [{'key': 'FFmpegVideoConvertor', 'preferredformat': format_type}]
+    
     try:
         os.makedirs('downloads', exist_ok=True)
         #download and convert he audio
         with yt_dlp.YoutubeDL(ydl_opts) as ydl:
             info = ydl.extract_info(url, download=True) # Download and get video info
+            duration = info.get('duration', 0)  # Get video duration in seconds
+
+            # Enforce duration restrictions
+            if resolution == '4k' and duration > 15 * 60:  # 15 minutes
+                return "4K videos are limited to 15 minutes.", 400
+            if resolution == '2k' and duration > 30 * 60:  # 30 minutes
+                return "2K videos are limited to 30 minutes.", 400
+            
             filename = ydl.prepare_filename(info)
             response = send_file(filename, as_attachment=True)
             # os.remove(filename)
             return response
+        
     except Exception as e:
         return f"Error downloading video: {str(e)}", 500
     
