@@ -8,8 +8,8 @@ app = Flask(__name__)
 AUDIO_FORMATS = {
     'mp3': [64, 128, 192, 256, 320],  # MP3 supports these bitrates
     'm4a': [128],                     # M4A uses 128 kbps (AAC codec)
-    'aac': [96, 128, 192],            # AAC options
-    'ogg': [64, 128, 192, 256]        # OGG options
+    # 'aac': [96, 128, 192],            # AAC options
+    # 'ogg': [64, 128, 192, 256]        # OGG options
 }
 
 VIDEO_FORMATS = ['mp4', 'webm', 'mkv']
@@ -52,6 +52,7 @@ def download_audio():
     }
 
     if start_time and end_time and 'playlist' not in url.lower():
+        ydl_opts['postprocessors'][0]['key'] = 'FFmpegExtractAudio'
         ydl_opts['postprocessor_args'] = ['-ss', start_time, '-to', end_time]
 
     try:

@@ -22,8 +22,8 @@ function updateBitrate() {
     const options = {
         'mp3': [64, 128, 192, 256, 320],
         'm4a': [128],
-        'aac': [96, 128, 192],
-        'ogg': [64, 128, 192, 256]
+        // 'aac': [96, 128, 192],
+        // 'ogg': [64, 128, 192, 256]
     };
 
     options[format].forEach(b => {
