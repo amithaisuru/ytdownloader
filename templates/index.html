@@ -17,8 +17,20 @@
     <div id="Audio" class="tabcontent">
         <h3>Audio Download</h3>
         <form action="{{ url_for('download_audio' )}}" method="post">
-            <label for="url">Youtube URL:</label><br>
-            <input type="text" id="url" name="url" placeholder="Enter URL Here"><br><br>
+            <label for="url_audio">Youtube URL:</label><br>
+            <input type="text" id="url_audio" name="url" placeholder="Enter URL Here"><br><br>
+
+            <label for="format_audio">Format:</label>
+            <select name="format" id="format_audio" onchange="updateBitrate()">
+                {% for format in audio_formats %}
+                    <option value="{{format}}">{{ format|upper }}</option>
+                {% endfor %}
+            </select><br><br>
+
+            <label for="bitrate">Bitrate:</label>
+            <!-- Bitrates handled by js -->
+            <select name="bitrate" id="bitrate"></select><br><br>
+
             <input type="submit" value="Download MP3">
         </form>
     </div>
@@ -29,10 +41,17 @@
         <form action="{{ url_for('download_video')}}" method="post">
             <label for="url">Youtube URL:</label><br>
             <input type="text" id="url" name="url" placeholder="Enter URL Here"><br><br>
+
+            <label for="format_video">Format:</label>
+            <select name="format" id="format_video">
+                {% for format in video_formats %}
+                    <option value="{{format}}">{{ format|upper }}</option>
+                {% endfor %}
+            </select><br><br>
+            
             <input type="submit" value="Download MP4">
         </form>
     </div>
-
 
     <script src="{{url_for('static', filename='script.js')}}"></script> 
 </body>

@@ -35,6 +35,7 @@ input[type="text"] {
     width: 300px;
     padding: 5px;
 }
+
 input[type="submit"] {
     padding: 8px 16px;
     background-color: #4CAF50;
@@ -42,6 +43,14 @@ input[type="submit"] {
     border: none;
     cursor: pointer;
 }
+
 input[type="submit"]:hover {
     background-color: #45a049;
+}
+
+div .active {
+    border: 1px solid black;
+    border-radius: 5px 5px 0 0;
+    background-color: #4CAF50;
+    z-index:2;
 }
