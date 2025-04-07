@@ -87,7 +87,7 @@ def download_video():
     }
 
     if mute:
-        ydl_opts['audio-quality'] = 0
+        ydl_opts['format'] = f'bestvideo[height<={RESOLUTIONS[resolution]}]+bestaudio/best[height<={RESOLUTIONS[resolution]}]'
     
     try:
         os.makedirs('downloads', exist_ok=True)
