@@ -1,19 +1,20 @@
 import datetime
 import os
 import re
-import tempfile
+import subprocess
 import zipfile
 
 import yt_dlp
 from flask import Flask, jsonify, render_template, request, send_file
+from yt_dlp.utils import sanitize_filename
 
 app = Flask(__name__)
 
 AUDIO_FORMATS = {
     'mp3': [64, 128, 192, 256, 320],  # MP3 supports these bitrates
     'm4a': [128],                     # M4A uses 128 kbps (AAC codec)
-    # 'aac': [96, 128, 192],            # AAC options
-    # 'ogg': [64, 128, 192, 256]        # OGG options
+    'aac': [96, 128, 192],            # AAC options
+    'ogg': [64, 128, 192, 256]        # OGG options
 }
 
 VIDEO_FORMATS = ['mp4', 'webm', 'mkv']
@@ -33,7 +34,7 @@ def home():
 
 def is_playlist(url):
     """Check if the URL is a playlist or contains a playlist identifier."""
-    return 'playlist' in url or 'list=' in url
+    return 'playlist' in url.lower() or 'list=' in url
 
 def get_timestamp():
     """Get formatted timestamp for folder naming."""
@@ -69,7 +70,62 @@ def download_audio():
         return handle_single_audio_download(url, format_type, bitrate, start_time, end_time)
 
 def handle_single_audio_download(url, format_type, bitrate, start_time='', end_time=''):
-    """Handle download of a single audio file."""
+    if format_type == 'aac':
+        return handle_aac_download(url, bitrate, start_time, end_time)
+    elif format_type == 'ogg':
+        #return handle_ogg_download(url, bitrate, start_time, end_time)
+        pass
+    else:
+        return handle_standard_audio_download(url, format_type, bitrate, start_time, end_time)
+
+
+def handle_aac_download(url, bitrate, start_time='', end_time=''):
+    try:
+        #Get video info
+        with yt_dlp.YoutubeDL({'quiet': True}) as ydl:
+            info = ydl.extract_info(url, download=False)
+            raw_title = info['title']
+
+        safe_title = sanitize_filename(raw_title)
+        download_path = f'downloads/{safe_title}.webm'
+        aac_path = f'downloads/{safe_title}.aac'
+
+        # Download the best audio format
+        ydl_opts = {
+            'format': 'bestaudio[ext=webm]/bestaudio',
+            'outtmpl': download_path,
+            'quiet': True,
+        }
+
+        with yt_dlp.YoutubeDL(ydl_opts) as ydl:
+            ydl.download([url])
+
+        # Convert to .aac using ffmpeg
+        ffmpeg_cmd = ['ffmpeg', '-y', '-i', download_path]
+        if start_time:
+            ffmpeg_cmd.extend(['-ss', start_time])
+        if end_time:
+            ffmpeg_cmd.extend(['-to', end_time])
+        ffmpeg_cmd.extend(['-c:a', 'aac', '-b:a', bitrate + 'k', '-f', 'adts', aac_path])
+
+        subprocess.run(ffmpeg_cmd, check=True)
+
+        if not os.path.exists(aac_path):
+            return f"Conversion failed. File not found: {aac_path}", 500
+
+        # Send the .aac file
+        response = send_file(aac_path, as_attachment=True)
+
+        # Step 5: Clean up
+        # os.remove(download_path)
+        # os.remove(aac_path)
+
+        return response
+
+    except Exception as e:
+        return f"Error: {str(e)}", 500
+
+def handle_standard_audio_download(url, format_type, bitrate, start_time='', end_time=''):
     ydl_opts = {
         'format': 'bestaudio',
         'postprocessors': [{
@@ -79,19 +135,13 @@ def handle_single_audio_download(url, format_type, bitrate, start_time='', end_t
         }],
         'outtmpl': 'downloads/%(title)s.%(ext)s',
     }
-
     if start_time and end_time:
-        ydl_opts['postprocessors'][0]['key'] = 'FFmpegExtractAudio'
         ydl_opts['postprocessor_args'] = ['-ss', start_time, '-to', end_time]
-
     try:
-        # Download and convert the audio
         with yt_dlp.YoutubeDL(ydl_opts) as ydl:
-            info = ydl.extract_info(url, download=True)  # Download and get video info
-            # Adjust file name
+            info = ydl.extract_info(url, download=True)
             filename = ydl.prepare_filename(info).replace('.webm', f'.{format_type}').replace('.m4a', f'.{format_type}')
             response = send_file(filename, as_attachment=True)
-            # os.remove(filename)  # Uncomment to remove file after sending
             return response
     except Exception as e:
         return f"Error downloading audio: {str(e)}", 500

@@ -1,4 +1,4 @@
-//swith tabs
+// static/script.js
 function openTab(evt, tabName) {
     var i, tabContent, tabLinks;
     tabContent = document.getElementsByClassName("tabcontent");
@@ -13,22 +13,19 @@ function openTab(evt, tabName) {
     evt.currentTarget.className += " active";
 }
 
-//update bitrate of audio beased on selected audio format
 function updateBitrate() {
     const format = document.getElementById('format_audio').value;
     const bitrate = document.getElementById('bitrate');
-
-    bitrate.innerHTML = ''; //clear exsisiting options
+    bitrate.innerHTML = '';
     const options = {
         'mp3': [64, 128, 192, 256, 320],
         'm4a': [128],
-        // 'aac': [96, 128, 192],
-        // 'ogg': [64, 128, 192, 256]
+        'aac': [96, 128, 192],
+        'ogg': [64, 128, 192, 256]
     };
-
     options[format].forEach(b => {
         let option = document.createElement('option');
-        option.value = b
+        option.value = b;
         option.text = `${b} kbps`;
         bitrate.appendChild(option);
     });
