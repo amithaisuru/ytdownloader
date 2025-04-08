@@ -1,3 +1,4 @@
+import datetime
 import os
 import re
 import tempfile
@@ -33,6 +34,11 @@ def home():
 def is_playlist(url):
     """Check if the URL is a playlist or contains a playlist identifier."""
     return 'playlist' in url or 'list=' in url
+
+def get_timestamp():
+    """Get formatted timestamp for folder naming."""
+    now = datetime.datetime.now()
+    return now.strftime("%Y%m%d%H%M%S")
 
 @app.route('/download_audio', methods=['POST'])
 def download_audio():
@@ -92,18 +98,6 @@ def handle_single_audio_download(url, format_type, bitrate, start_time='', end_t
 
 def handle_playlist_download(url, format_type, bitrate):
     """Handle download of a playlist as audio files."""
-    # Configuration for yt-dlp
-    ydl_opts = {
-        'format': 'bestaudio',
-        'postprocessors': [{
-            'key': 'FFmpegExtractAudio',
-            'preferredcodec': format_type,
-            'preferredquality': bitrate,
-        }],
-        'outtmpl': 'downloads/%(playlist_title)s/%(title)s.%(ext)s',
-        'ignoreerrors': True,  # Skip videos that cannot be downloaded
-    }
-
     try:
         # First, extract playlist information to get the playlist title
         with yt_dlp.YoutubeDL({'extract_flat': True}) as ydl:
@@ -114,17 +108,33 @@ def handle_playlist_download(url, format_type, bitrate):
             playlist_title = playlist_info.get('title', 'playlist')
             # Clean filename to avoid issues with filesystem
             playlist_title = re.sub(r'[^\w\-_\. ]', '_', playlist_title)
+    except Exception as e:
+        return f"Error retrieving playlist information: {str(e)}", 500
 
-        # Create a directory for this playlist
-        playlist_dir = os.path.join('downloads', playlist_title)
-        os.makedirs(playlist_dir, exist_ok=True)
+    # Create a directory for this playlist
+    timestamp = get_timestamp()
+    folder_name = f"{playlist_title}_{timestamp}"
+    playlist_dir = os.path.join('downloads', folder_name)
+    os.makedirs(playlist_dir, exist_ok=True)
 
+    ydl_opts = {
+        'format': 'bestaudio',
+        'postprocessors': [{
+            'key': 'FFmpegExtractAudio',
+            'preferredcodec': format_type,
+            'preferredquality': bitrate,
+        }],
+        'outtmpl': f'downloads/{folder_name}/%(title)s.%(ext)s',
+        'ignoreerrors': True,  # Skip videos that cannot be downloaded
+    }
+
+    try:
         # Download all videos in the playlist
         with yt_dlp.YoutubeDL(ydl_opts) as ydl:
             ydl.extract_info(url, download=True)
 
         # Create a zip file of all downloaded audio files
-        zip_path = os.path.join('downloads', f"{playlist_title}.zip")
+        zip_path = os.path.join('downloads', f"{folder_name}.zip")
         with zipfile.ZipFile(zip_path, 'w') as zipf:
             for root, dirs, files in os.walk(playlist_dir):
                 for file in files:
