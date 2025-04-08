@@ -1,7 +1,10 @@
 import os
+import re
+import tempfile
+import zipfile
 
 import yt_dlp
-from flask import Flask, render_template, request, send_file
+from flask import Flask, jsonify, render_template, request, send_file
 
 app = Flask(__name__)
 
@@ -27,6 +30,10 @@ def home():
         resolutions = RESOLUTIONS.keys()
     )
 
+def is_playlist(url):
+    """Check if the URL is a playlist or contains a playlist identifier."""
+    return 'playlist' in url or 'list=' in url
+
 @app.route('/download_audio', methods=['POST'])
 def download_audio():
     url = request.form.get('url')
@@ -41,6 +48,22 @@ def download_audio():
     if format_type not in AUDIO_FORMATS or int(bitrate) not in AUDIO_FORMATS[format_type]:
         return "Invalid format or bitrate selected.", 400
     
+    # Create downloads directory if it doesn't exist
+    os.makedirs('downloads', exist_ok=True)
+
+    # Check if URL is a playlist
+    if is_playlist(url):
+        if start_time or end_time:
+            return "Trimming (start/end time) is not supported for playlists. Please remove trim settings or use a single video URL.", 400
+ 
+        # If it's a playlist, we'll download all videos as separate audio files and zip them
+        return handle_playlist_download(url, format_type, bitrate)
+    else:
+        # If it's a single video, proceed with standard download
+        return handle_single_audio_download(url, format_type, bitrate, start_time, end_time)
+
+def handle_single_audio_download(url, format_type, bitrate, start_time='', end_time=''):
+    """Handle download of a single audio file."""
     ydl_opts = {
         'format': 'bestaudio',
         'postprocessors': [{
@@ -51,22 +74,75 @@ def download_audio():
         'outtmpl': 'downloads/%(title)s.%(ext)s',
     }
 
-    if start_time and end_time and 'playlist' not in url.lower():
+    if start_time and end_time:
         ydl_opts['postprocessors'][0]['key'] = 'FFmpegExtractAudio'
         ydl_opts['postprocessor_args'] = ['-ss', start_time, '-to', end_time]
 
     try:
-        os.makedirs('downloads', exist_ok=True)
-        #download and convert he audio
+        # Download and convert the audio
         with yt_dlp.YoutubeDL(ydl_opts) as ydl:
-            info = ydl.extract_info(url, download=True) # Download and get video info
-            # adjust file name
+            info = ydl.extract_info(url, download=True)  # Download and get video info
+            # Adjust file name
             filename = ydl.prepare_filename(info).replace('.webm', f'.{format_type}').replace('.m4a', f'.{format_type}')
             response = send_file(filename, as_attachment=True)
-            # os.remove(filename)
+            # os.remove(filename)  # Uncomment to remove file after sending
             return response
     except Exception as e:
         return f"Error downloading audio: {str(e)}", 500
+
+def handle_playlist_download(url, format_type, bitrate):
+    """Handle download of a playlist as audio files."""
+    # Configuration for yt-dlp
+    ydl_opts = {
+        'format': 'bestaudio',
+        'postprocessors': [{
+            'key': 'FFmpegExtractAudio',
+            'preferredcodec': format_type,
+            'preferredquality': bitrate,
+        }],
+        'outtmpl': 'downloads/%(playlist_title)s/%(title)s.%(ext)s',
+        'ignoreerrors': True,  # Skip videos that cannot be downloaded
+    }
+
+    try:
+        # First, extract playlist information to get the playlist title
+        with yt_dlp.YoutubeDL({'extract_flat': True}) as ydl:
+            playlist_info = ydl.extract_info(url, download=False)
+            if not playlist_info:
+                return "Could not retrieve playlist information.", 500
+            
+            playlist_title = playlist_info.get('title', 'playlist')
+            # Clean filename to avoid issues with filesystem
+            playlist_title = re.sub(r'[^\w\-_\. ]', '_', playlist_title)
+
+        # Create a directory for this playlist
+        playlist_dir = os.path.join('downloads', playlist_title)
+        os.makedirs(playlist_dir, exist_ok=True)
+
+        # Download all videos in the playlist
+        with yt_dlp.YoutubeDL(ydl_opts) as ydl:
+            ydl.extract_info(url, download=True)
+
+        # Create a zip file of all downloaded audio files
+        zip_path = os.path.join('downloads', f"{playlist_title}.zip")
+        with zipfile.ZipFile(zip_path, 'w') as zipf:
+            for root, dirs, files in os.walk(playlist_dir):
+                for file in files:
+                    if file.endswith(f'.{format_type}'):
+                        file_path = os.path.join(root, file)
+                        arcname = os.path.relpath(file_path, 'downloads')
+                        zipf.write(file_path, arcname)
+
+        # Send the zip file
+        response = send_file(zip_path, as_attachment=True)
+        # Clean up files - uncomment to enable cleanup
+        # import shutil
+        # shutil.rmtree(playlist_dir)
+        # os.remove(zip_path)
+        return response
+
+    except Exception as e:
+        return f"Error downloading playlist: {str(e)}", 500
 
 @app.route('/download_video', methods=['POST'])
 def download_video():
@@ -87,11 +163,15 @@ def download_video():
     }
 
     if mute:
-        ydl_opts['format'] = f'bestvideo[height<={RESOLUTIONS[resolution]}]+bestaudio/best[height<={RESOLUTIONS[resolution]}]'
+        ydl_opts['format'] = f'bestvideo[height<={RESOLUTIONS[resolution]}]/best[height<={RESOLUTIONS[resolution]}]'
+        ydl_opts['postprocessors'] = [{
+            'key': 'FFmpegVideoConvertor',
+            'preferedformat': format_type,
+        }]
     
     try:
         os.makedirs('downloads', exist_ok=True)
-        #download and convert he audio
+        #download and convert the video
         with yt_dlp.YoutubeDL(ydl_opts) as ydl:
             info = ydl.extract_info(url, download=True) # Download and get video info
             duration = info.get('duration', 0)  # Get video duration in seconds
@@ -112,4 +192,3 @@ def download_video():
     
 if __name__ == '__main__':
     app.run(debug=True, host='0.0.0.0', port=5000)
-    
