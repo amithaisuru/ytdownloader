@@ -73,11 +73,9 @@ def handle_single_audio_download(url, format_type, bitrate, start_time='', end_t
     if format_type == 'aac':
         return handle_aac_download(url, bitrate, start_time, end_time)
     elif format_type == 'ogg':
-        #return handle_ogg_download(url, bitrate, start_time, end_time)
-        pass
+        return handle_ogg_download(url, bitrate, start_time, end_time)
     else:
         return handle_standard_audio_download(url, format_type, bitrate, start_time, end_time)
-
 
 def handle_aac_download(url, bitrate, start_time='', end_time=''):
     try:
@@ -125,6 +123,52 @@ def handle_aac_download(url, bitrate, start_time='', end_time=''):
     except Exception as e:
         return f"Error: {str(e)}", 500
 
+def handle_ogg_download(url, bitrate, start_time='', end_time=''):
+    try:
+        # Step 1: Get video title and sanitize
+        with yt_dlp.YoutubeDL({'quiet': True}) as ydl:
+            info = ydl.extract_info(url, download=False)
+            raw_title = info['title']
+
+        safe_title = sanitize_filename(raw_title)
+        download_path = f'downloads/{safe_title}.webm'
+        ogg_path = f'downloads/{safe_title}.ogg'
+
+        # Step 2: Download best audio
+        ydl_opts = {
+            'format': 'bestaudio[ext=webm]/bestaudio',
+            'outtmpl': download_path,
+            'quiet': True,
+        }
+
+        with yt_dlp.YoutubeDL(ydl_opts) as ydl:
+            ydl.download([url])
+
+        # Step 3: Convert to OGG using ffmpeg (libvorbis)
+        ffmpeg_cmd = ['ffmpeg', '-y', '-i', download_path]
+        if start_time:
+            ffmpeg_cmd.extend(['-ss', start_time])
+        if end_time:
+            ffmpeg_cmd.extend(['-to', end_time])
+        ffmpeg_cmd.extend(['-c:a', 'libvorbis', '-b:a', bitrate + 'k', ogg_path])
+
+        subprocess.run(ffmpeg_cmd, check=True)
+
+        if not os.path.exists(ogg_path):
+            return f"Conversion failed. File not found: {ogg_path}", 500
+
+        # Step 4: Send the .ogg file
+        response = send_file(ogg_path, as_attachment=True)
+
+        # Step 5: Clean up (optional)
+        # os.remove(download_path)
+        # os.remove(ogg_path)
+
+        return response
+
+    except Exception as e:
+        return f"Error downloading OGG audio: {str(e)}", 500
+    
 def handle_standard_audio_download(url, format_type, bitrate, start_time='', end_time=''):
     ydl_opts = {
         'format': 'bestaudio',
