@@ -166,6 +166,12 @@ def download_video():
     if format_type not in VIDEO_FORMATS or resolution not in RESOLUTIONS:
         return "Invalid format selected.", 400
     
+    if is_playlist(url):
+        return handle_playlist_video_download(url, format_type, resolution, mute)
+    else:
+        return handle_single_video_download(url, format_type, resolution, mute)
+        
+def handle_single_video_download(url, format_type, resolution, mute):
     ydl_opts = {
         'format': f'bestvideo[height<={RESOLUTIONS[resolution]}]+bestaudio/best[height<={RESOLUTIONS[resolution]}]',
         'merge_output_format': format_type,
@@ -199,6 +205,77 @@ def download_video():
         
     except Exception as e:
         return f"Error downloading video: {str(e)}", 500
+
+def handle_playlist_video_download(url, format_type, resolution, mute):
+    #ectract plalist info and get playlist title
+    try:
+        with yt_dlp.YoutubeDL({'extract_flat': True}) as ydl:
+            playlist_info = ydl.extract_info(url, download=False)
+            if not playlist_info:
+                return "Could not retrieve playlist information.", 500
+            
+            playlist_title = playlist_info.get('title', 'playlist')
+            # Clean filename to avoid issues with filesystem
+            playlist_title = re.sub(r'[^\w\-_\. ]', '_', playlist_title)
+    except Exception as e:
+        return f"Error retrieving playlist information: {str(e)}", 500
+    
+    # Create a directory for this playlist
+    timestamp = get_timestamp()
+    folder_name = f"{playlist_title}_{timestamp}"
+    playlist_dir = os.path.join('downloads', folder_name)
+    os.makedirs(playlist_dir, exist_ok=True)
+
+    #configure yt-dlp options
+    ydl_opts = {
+        'format': f'bestvideo[height<={RESOLUTIONS[resolution]}]+bestaudio/best[height<={RESOLUTIONS[resolution]}]',
+        'merge_output_format': format_type,
+        'outtmpl': f'downloads/{folder_name}/%(title)s.%(ext)s',
+        'ignoreerrors': True,  # Skip videos that cannot be downloaded
+    }
+
+    if mute:
+        ydl_opts['format'] = f'bestvideo[height<={RESOLUTIONS[resolution]}]/best[height<={RESOLUTIONS[resolution]}]'
+        ydl_opts['postprocessors'] = [{
+            'key': 'FFmpegVideoConvertor',
+            'preferedformat': format_type,
+        }]
+    
+    try:
+        #download all videos
+        with yt_dlp.YoutubeDL(ydl_opts) as ydl:
+            playlist_items = ydl.extract_info(url, download=True)
+
+            #chec duration constraints
+            if resolution in ['4k', '2k'] and playlist_items and 'entries' in playlist_items:
+                for entry in playlist_items['entries']:
+                    if entry:
+                        duration = entry.get('duration', 0)
+                        if resolution == '4k'  and duration > 15 * 60:
+                            return f"Video '{entry.get('title', 'Unknown')}' exceeds the 15-minute limit for 4K resolution.", 400
+                        if resolution == '2k' and duration > 30 * 60:
+                            return f"Video '{entry.get('title', 'Unknown')}' exceeds the 30-minute limit for 2K resolution.", 400
+            
+        # Create a zip file of all downloaded video files
+        zip_path = os.path.join('downloads', f"{folder_name}.zip")
+        with zipfile.ZipFile(zip_path, 'w') as zipf:
+            for root, dirs, files in os.walk(playlist_dir):
+                for file in files:
+                    if file.endswith(f'.{format_type}'):
+                        file_path = os.path.join(root, file)
+                        arcname = os.path.relpath(file_path, 'downloads')
+                        zipf.write(file_path, arcname)
+        
+        #send the zip file
+        response = send_file(zip_path, as_attachment=True)
+        # Clean up files - uncomment to enable cleanup
+        # import shutil
+        # shutil.rmtree(playlist_dir)
+        # os.remove(zip_path)
+        return response
+    
+    except Exception as e:
+        return f"Error downloading playlist: {str(e)}", 500
     
 if __name__ == '__main__':
     app.run(debug=True, host='0.0.0.0', port=5000)
