@@ -13,6 +13,7 @@ from flask import Flask, jsonify, render_template, request, send_file, session
 from yt_dlp.utils import sanitize_filename
 
 from flask_session import Session
+from init_db import DB_PATH
 
 app = Flask(__name__)
 app.config['SECRET_KEY'] = os.urandom(24)
@@ -33,29 +34,6 @@ RESOLUTIONS = {
     '480p': '480', '360p': '360', '244p': '240', '144p': '144'
 }
 
-# SQLite database
-DB_PATH = 'downloads.db'
-
-def init_db():
-    with sqlite3.connect(DB_PATH) as conn:
-        conn.execute('''
-            CREATE TABLE IF NOT EXISTS downloads (
-                download_id TEXT PRIMARY KEY,
-                session_id TEXT,
-                url TEXT,
-                status TEXT,
-                format_type TEXT,
-                bitrate_or_res TEXT,
-                file_path TEXT,
-                created_at TIMESTAMP
-            )
-        ''')
-        conn.commit()
-
-# Drop old table and recreate to avoid conflicts (run once if schema changes)
-with sqlite3.connect(DB_PATH) as conn:
-    conn.execute('DROP TABLE IF EXISTS downloads')
-init_db()
 
 # Threading setup
 executor = ThreadPoolExecutor(max_workers=4)
@@ -83,7 +61,7 @@ def update_status(download_id, status, file_path=None):
             conn.commit()
 
 def cleanup_expired_sessions():
-    expiration = datetime.datetime.now() - datetime.timedelta(seconds=86400)
+    expiration = datetime.datetime.now() - datetime.timedelta(seconds=60*3) 
     with db_lock:
         with sqlite3.connect(DB_PATH) as conn:
             cursor = conn.execute(
