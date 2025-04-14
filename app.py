@@ -9,6 +9,7 @@ import zipfile
 from concurrent.futures import ThreadPoolExecutor
 
 import yt_dlp
+from apscheduler.schedulers.background import BackgroundScheduler
 from flask import Flask, jsonify, render_template, request, send_file, session
 from yt_dlp.utils import sanitize_filename
 
@@ -18,8 +19,62 @@ from init_db import DB_PATH
 app = Flask(__name__)
 app.config['SECRET_KEY'] = os.urandom(24)
 app.config['SESSION_TYPE'] = 'filesystem'
-app.config['PERMANENT_SESSION_LIFETIME'] = 86400  # 1 day
+app.config['PERMANENT_SESSION_LIFETIME'] = 30  # 1 day
+
+def cleanup_expired_sessions():
+    expiration = datetime.datetime.now() - datetime.timedelta(seconds=30)
+    with db_lock:
+        with sqlite3.connect(DB_PATH) as conn:
+            cursor = conn.execute(
+                'SELECT session_id, file_path FROM downloads WHERE created_at < ?',
+                (expiration,)
+            )
+            sessions_to_delete = set()
+            for row in cursor.fetchall():
+                session_id, file_path = row
+                sessions_to_delete.add(session_id)
+                if file_path and os.path.exists(file_path):
+                    try:
+                        os.remove(file_path)
+                    except Exception:
+                        pass
+            for session_id in sessions_to_delete:
+                session_dir = os.path.join('downloads', session_id)
+                if os.path.exists(session_dir):
+                    import shutil
+                    try:
+                        shutil.rmtree(session_dir)
+                    except Exception:
+                        pass
+            conn.execute('DELETE FROM downloads WHERE created_at < ?', (expiration,))
+            conn.commit()
+
+    # Also check flask_session folder for expired sessions
+    import glob
+    session_dir = 'flask_session'
+    if os.path.exists(session_dir):
+        for session_file in glob.glob(os.path.join(session_dir, 'sess_*')):
+            try:
+                file_mtime = os.path.getmtime(session_file)
+                if (datetime.datetime.now() - datetime.datetime.fromtimestamp(file_mtime)).total_seconds() > 30:
+                    session_id = None
+                    with open(session_file, 'rb') as f:
+                        import pickle
+                        data = pickle.load(f)
+                        session_id = data.get('session_id')
+                    os.remove(session_file)
+                    if session_id:
+                        session_dir = os.path.join('downloads', session_id)
+                        if os.path.exists(session_dir):
+                            import shutil
+                            shutil.rmtree(session_dir)
+            except Exception:
+                pass
+
 Session(app)
+scheduler = BackgroundScheduler()
+scheduler.add_job(func=cleanup_expired_sessions, trigger="interval", seconds=10)
+scheduler.start()
 
 AUDIO_FORMATS = {
     'mp3': [64, 128, 192, 256, 320],
@@ -61,7 +116,7 @@ def update_status(download_id, status, file_path=None):
             conn.commit()
 
 def cleanup_expired_sessions():
-    expiration = datetime.datetime.now() - datetime.timedelta(seconds=60*3) 
+    expiration = datetime.datetime.now() - datetime.timedelta(seconds=30)
     with db_lock:
         with sqlite3.connect(DB_PATH) as conn:
             cursor = conn.execute(
@@ -73,14 +128,42 @@ def cleanup_expired_sessions():
                 session_id, file_path = row
                 sessions_to_delete.add(session_id)
                 if file_path and os.path.exists(file_path):
-                    os.remove(file_path)
+                    try:
+                        os.remove(file_path)
+                    except Exception:
+                        pass
             for session_id in sessions_to_delete:
                 session_dir = os.path.join('downloads', session_id)
                 if os.path.exists(session_dir):
                     import shutil
-                    shutil.rmtree(session_dir)
+                    try:
+                        shutil.rmtree(session_dir)
+                    except Exception:
+                        pass
             conn.execute('DELETE FROM downloads WHERE created_at < ?', (expiration,))
             conn.commit()
+
+    # Also check flask_session folder for expired sessions
+    import glob
+    session_dir = 'flask_session'
+    if os.path.exists(session_dir):
+        for session_file in glob.glob(os.path.join(session_dir, 'sess_*')):
+            try:
+                file_mtime = os.path.getmtime(session_file)
+                if (datetime.datetime.now() - datetime.datetime.fromtimestamp(file_mtime)).total_seconds() > 30:
+                    session_id = None
+                    with open(session_file, 'rb') as f:
+                        import pickle
+                        data = pickle.load(f)
+                        session_id = data.get('session_id')
+                    os.remove(session_file)
+                    if session_id:
+                        session_dir = os.path.join('downloads', session_id)
+                        if os.path.exists(session_dir):
+                            import shutil
+                            shutil.rmtree(session_dir)
+            except Exception:
+                pass
 
 @app.route('/')
 def home():
