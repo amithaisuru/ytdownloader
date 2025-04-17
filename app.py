@@ -20,7 +20,7 @@ from utils import cleanup_expired_sessions
 app = Flask(__name__)
 app.config['SECRET_KEY'] = os.urandom(24)
 app.config['SESSION_TYPE'] = 'filesystem'
-app.config['PERMANENT_SESSION_LIFETIME'] = 30  # 1 day
+app.config['PERMANENT_SESSION_LIFETIME'] = 30  # 30 seconds for testing
 
 Session(app)
 scheduler = BackgroundScheduler()
@@ -40,9 +40,9 @@ RESOLUTIONS = {
     '480p': '480', '360p': '360', '244p': '240', '144p': '144'
 }
 
-
 # Threading setup
-executor = ThreadPoolExecutor(max_workers=4)
+NUM_OF_THREADS = 4
+executor = ThreadPoolExecutor(max_workers=NUM_OF_THREADS)
 db_lock = threading.Lock()
 
 def is_playlist(url):
