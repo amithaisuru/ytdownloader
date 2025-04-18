@@ -1,0 +1,5 @@
+for the first time
+source server_init_start.sh
+
+afterward
+source server_start.sh
