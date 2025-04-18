@@ -4,3 +4,4 @@ __pycache__/app.cpython-310.pyc
 *.pyc
 /flask_session
 downloads.db
+/venv
