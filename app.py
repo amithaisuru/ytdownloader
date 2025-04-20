@@ -1,20 +1,37 @@
 import datetime
 import os
 import re
+import sqlite3
 import subprocess
+import threading
+import uuid
 import zipfile
+from concurrent.futures import ThreadPoolExecutor
 
 import yt_dlp
-from flask import Flask, jsonify, render_template, request, send_file
+from apscheduler.schedulers.background import BackgroundScheduler
+from flask import Flask, jsonify, render_template, request, send_file, session
 from yt_dlp.utils import sanitize_filename
 
+from flask_session import Session
+from init_db import DB_PATH
+from utils import cleanup_expired_sessions
+
 app = Flask(__name__)
+app.config['SECRET_KEY'] = os.urandom(24)
+app.config['SESSION_TYPE'] = 'filesystem'
+app.config['PERMANENT_SESSION_LIFETIME'] = 30  # 30 seconds for testing
+
+Session(app)
+scheduler = BackgroundScheduler()
+scheduler.add_job(func=cleanup_expired_sessions, trigger="interval", seconds=10)
+scheduler.start()
 
 AUDIO_FORMATS = {
-    'mp3': [64, 128, 192, 256, 320],  # MP3 supports these bitrates
-    'm4a': [128],                     # M4A uses 128 kbps (AAC codec)
-    'aac': [96, 128, 192],            # AAC options
-    'ogg': [64, 128, 192, 256]        # OGG options
+    'mp3': [64, 128, 192, 256, 320],
+    'm4a': [128],
+    'aac': [96, 128, 192],
+    'ogg': [64, 128, 192, 256]
 }
 
 VIDEO_FORMATS = ['mp4', 'webm', 'mkv']
@@ -23,23 +40,94 @@ RESOLUTIONS = {
     '480p': '480', '360p': '360', '244p': '240', '144p': '144'
 }
 
+# Threading setup
+NUM_OF_THREADS = 4
+executor = ThreadPoolExecutor(max_workers=NUM_OF_THREADS)
+db_lock = threading.Lock()
+
+def is_playlist(url):
+    return 'playlist' in url.lower() or 'list=' in url
+
+def get_timestamp():
+    return datetime.datetime.now().strftime("%Y%m%d%H%M%S")
+
+def update_status(download_id, status, file_path=None):
+    with db_lock:
+        with sqlite3.connect(DB_PATH) as conn:
+            if file_path:
+                conn.execute(
+                    'UPDATE downloads SET status = ?, file_path = ? WHERE download_id = ?',
+                    (status, file_path, download_id)
+                )
+            else:
+                conn.execute(
+                    'UPDATE downloads SET status = ? WHERE download_id = ?',
+                    (status, download_id)
+                )
+            conn.commit()
+
+def cleanup_expired_sessions():
+    expiration = datetime.datetime.now() - datetime.timedelta(seconds=30)
+    with db_lock:
+        with sqlite3.connect(DB_PATH) as conn:
+            cursor = conn.execute(
+                'SELECT session_id, file_path FROM downloads WHERE created_at < ?',
+                (expiration,)
+            )
+            sessions_to_delete = set()
+            for row in cursor.fetchall():
+                session_id, file_path = row
+                sessions_to_delete.add(session_id)
+                if file_path and os.path.exists(file_path):
+                    try:
+                        os.remove(file_path)
+                    except Exception:
+                        pass
+            for session_id in sessions_to_delete:
+                session_dir = os.path.join('downloads', session_id)
+                if os.path.exists(session_dir):
+                    import shutil
+                    try:
+                        shutil.rmtree(session_dir)
+                    except Exception:
+                        pass
+            conn.execute('DELETE FROM downloads WHERE created_at < ?', (expiration,))
+            conn.commit()
+
+    # Also check flask_session folder for expired sessions
+    import glob
+    session_dir = 'flask_session'
+    if os.path.exists(session_dir):
+        for session_file in glob.glob(os.path.join(session_dir, 'sess_*')):
+            try:
+                file_mtime = os.path.getmtime(session_file)
+                if (datetime.datetime.now() - datetime.datetime.fromtimestamp(file_mtime)).total_seconds() > 30:
+                    session_id = None
+                    with open(session_file, 'rb') as f:
+                        import pickle
+                        data = pickle.load(f)
+                        session_id = data.get('session_id')
+                    os.remove(session_file)
+                    if session_id:
+                        session_dir = os.path.join('downloads', session_id)
+                        if os.path.exists(session_dir):
+                            import shutil
+                            shutil.rmtree(session_dir)
+            except Exception:
+                pass
+
 @app.route('/')
 def home():
+    if 'session_id' not in session:
+        session['session_id'] = str(uuid.uuid4())
+        session.permanent = True
     return render_template(
         'index.html',
         audio_formats=AUDIO_FORMATS,
         video_formats=VIDEO_FORMATS,
-        resolutions = RESOLUTIONS.keys()
+        resolutions=RESOLUTIONS.keys(),
+        session_id=session['session_id']
     )
-
-def is_playlist(url):
-    """Check if the URL is a playlist or contains a playlist identifier."""
-    return 'playlist' in url.lower() or 'list=' in url
-
-def get_timestamp():
-    """Get formatted timestamp for folder naming."""
-    now = datetime.datetime.now()
-    return now.strftime("%Y%m%d%H%M%S")
 
 @app.route('/download_audio', methods=['POST'])
 def download_audio():
@@ -50,55 +138,100 @@ def download_audio():
     end_time = request.form.get('end_time', '')
 
     if not url or not format_type or not bitrate:
-        return "Missing required fields. Please fill out all options.", 400
-
+        return jsonify({'error': 'Missing required fields'}), 400
     if format_type not in AUDIO_FORMATS or int(bitrate) not in AUDIO_FORMATS[format_type]:
-        return "Invalid format or bitrate selected.", 400
-    
-    # Create downloads directory if it doesn't exist
-    os.makedirs('downloads', exist_ok=True)
+        return jsonify({'error': 'Invalid format or bitrate'}), 400
 
-    # Check if URL is a playlist
+    session_id = session.get('session_id', str(uuid.uuid4()))
+    session['session_id'] = session_id
+    session.permanent = True
+    download_id = str(uuid.uuid4())
+
+    user_dir = os.path.join('downloads', session_id)
+    os.makedirs(user_dir, exist_ok=True)
+
+    with db_lock:
+        with sqlite3.connect(DB_PATH) as conn:
+            conn.execute(
+                'INSERT INTO downloads (download_id, session_id, url, status, format_type, bitrate_or_res, created_at) VALUES (?, ?, ?, ?, ?, ?, ?)',
+                (download_id, session_id, url, 'Pending', format_type, bitrate, datetime.datetime.now())
+            )
+            conn.commit()
+
     if is_playlist(url):
         if start_time or end_time:
-            return "Trimming (start/end time) is not supported for playlists. Please remove trim settings or use a single video URL.", 400
- 
-        # If it's a playlist, we'll download all videos as separate audio files and zip them
-        return handle_playlist_download(url, format_type, bitrate)
+            return jsonify({'error': 'Trimming not supported for playlists'}), 400
+        executor.submit(handle_playlist_download, download_id, session_id, url, format_type, bitrate, user_dir)
     else:
-        # If it's a single video, proceed with standard download
-        return handle_single_audio_download(url, format_type, bitrate, start_time, end_time)
+        executor.submit(handle_single_audio_download, download_id, session_id, url, format_type, bitrate, start_time, end_time, user_dir)
 
-def handle_single_audio_download(url, format_type, bitrate, start_time='', end_time=''):
-    if format_type == 'aac':
-        return handle_aac_download(url, bitrate, start_time, end_time)
-    elif format_type == 'ogg':
-        return handle_ogg_download(url, bitrate, start_time, end_time)
+    return jsonify({'download_id': download_id, 'status': 'Pending'})
+
+@app.route('/download_video', methods=['POST'])
+def download_video():
+    url = request.form.get('url')
+    format_type = request.form.get('format')
+    resolution = request.form.get('resolution')
+    mute = request.form.get('mute', 'off') == 'on'
+
+    if not url or not format_type or not resolution:
+        return jsonify({'error': 'Missing required fields'}), 400
+    if format_type not in VIDEO_FORMATS or resolution not in RESOLUTIONS:
+        return jsonify({'error': 'Invalid format or resolution'}), 400
+
+    session_id = session.get('session_id', str(uuid.uuid4()))
+    session['session_id'] = session_id
+    session.permanent = True
+    download_id = str(uuid.uuid4())
+
+    user_dir = os.path.join('downloads', session_id)
+    os.makedirs(user_dir, exist_ok=True)
+
+    with db_lock:
+        with sqlite3.connect(DB_PATH) as conn:
+            conn.execute(
+                'INSERT INTO downloads (download_id, session_id, url, status, format_type, bitrate_or_res, created_at) VALUES (?, ?, ?, ?, ?, ?, ?)',
+                (download_id, session_id, url, 'Pending', format_type, resolution, datetime.datetime.now())
+            )
+            conn.commit()
+
+    if is_playlist(url):
+        executor.submit(handle_playlist_video_download, download_id, session_id, url, format_type, resolution, mute, user_dir)
     else:
-        return handle_standard_audio_download(url, format_type, bitrate, start_time, end_time)
+        executor.submit(handle_single_video_download, download_id, session_id, url, format_type, resolution, mute, user_dir)
 
-def handle_aac_download(url, bitrate, start_time='', end_time=''):
+    return jsonify({'download_id': download_id, 'status': 'Pending'})
+
+def handle_single_audio_download(download_id, session_id, url, format_type, bitrate, start_time, end_time, user_dir):
+    update_status(download_id, 'Downloading')
     try:
-        #Get video info
+        if format_type == 'aac':
+            handle_aac_download(download_id, url, bitrate, start_time, end_time, user_dir)
+        elif format_type == 'ogg':
+            handle_ogg_download(download_id, url, bitrate, start_time, end_time, user_dir)
+        else:
+            handle_standard_audio_download(download_id, url, format_type, bitrate, start_time, end_time, user_dir)
+    except Exception as e:
+        update_status(download_id, 'Error: ' + str(e))
+        raise
+
+def handle_aac_download(download_id, url, bitrate, start_time, end_time, user_dir):
+    try:
         with yt_dlp.YoutubeDL({'quiet': True}) as ydl:
             info = ydl.extract_info(url, download=False)
-            raw_title = info['title']
+            safe_title = sanitize_filename(info['title'])
+        
+        download_path = os.path.join(user_dir, f'{safe_title}.webm')
+        aac_path = os.path.join(user_dir, f'{safe_title}.aac')
 
-        safe_title = sanitize_filename(raw_title)
-        download_path = f'downloads/{safe_title}.webm'
-        aac_path = f'downloads/{safe_title}.aac'
-
-        # Download the best audio format
         ydl_opts = {
             'format': 'bestaudio[ext=webm]/bestaudio',
             'outtmpl': download_path,
             'quiet': True,
         }
-
         with yt_dlp.YoutubeDL(ydl_opts) as ydl:
             ydl.download([url])
 
-        # Convert to .aac using ffmpeg
         ffmpeg_cmd = ['ffmpeg', '-y', '-i', download_path]
         if start_time:
             ffmpeg_cmd.extend(['-ss', start_time])
@@ -109,42 +242,30 @@ def handle_aac_download(url, bitrate, start_time='', end_time=''):
         subprocess.run(ffmpeg_cmd, check=True)
 
         if not os.path.exists(aac_path):
-            return f"Conversion failed. File not found: {aac_path}", 500
+            raise Exception(f"Conversion failed: {aac_path} not found")
 
-        # Send the .aac file
-        response = send_file(aac_path, as_attachment=True)
-
-        # Step 5: Clean up
-        # os.remove(download_path)
-        # os.remove(aac_path)
-
-        return response
-
+        update_status(download_id, 'Completed', aac_path)
     except Exception as e:
-        return f"Error: {str(e)}", 500
+        update_status(download_id, 'Error: ' + str(e))
+        raise
 
-def handle_ogg_download(url, bitrate, start_time='', end_time=''):
+def handle_ogg_download(download_id, url, bitrate, start_time, end_time, user_dir):
     try:
-        # Step 1: Get video title and sanitize
         with yt_dlp.YoutubeDL({'quiet': True}) as ydl:
             info = ydl.extract_info(url, download=False)
-            raw_title = info['title']
+            safe_title = sanitize_filename(info['title'])
+        
+        download_path = os.path.join(user_dir, f'{safe_title}.webm')
+        ogg_path = os.path.join(user_dir, f'{safe_title}.ogg')
 
-        safe_title = sanitize_filename(raw_title)
-        download_path = f'downloads/{safe_title}.webm'
-        ogg_path = f'downloads/{safe_title}.ogg'
-
-        # Step 2: Download best audio
         ydl_opts = {
             'format': 'bestaudio[ext=webm]/bestaudio',
             'outtmpl': download_path,
             'quiet': True,
         }
-
         with yt_dlp.YoutubeDL(ydl_opts) as ydl:
             ydl.download([url])
 
-        # Step 3: Convert to OGG using ffmpeg (libvorbis)
         ffmpeg_cmd = ['ffmpeg', '-y', '-i', download_path]
         if start_time:
             ffmpeg_cmd.extend(['-ss', start_time])
@@ -155,221 +276,169 @@ def handle_ogg_download(url, bitrate, start_time='', end_time=''):
         subprocess.run(ffmpeg_cmd, check=True)
 
         if not os.path.exists(ogg_path):
-            return f"Conversion failed. File not found: {ogg_path}", 500
+            raise Exception(f"Conversion failed: {ogg_path} not found")
 
-        # Step 4: Send the .ogg file
-        response = send_file(ogg_path, as_attachment=True)
-
-        # Step 5: Clean up (optional)
-        # os.remove(download_path)
-        # os.remove(ogg_path)
-
-        return response
-
+        update_status(download_id, 'Completed', ogg_path)
     except Exception as e:
-        return f"Error downloading OGG audio: {str(e)}", 500
-    
-def handle_standard_audio_download(url, format_type, bitrate, start_time='', end_time=''):
-    ydl_opts = {
-        'format': 'bestaudio',
-        'postprocessors': [{
-            'key': 'FFmpegExtractAudio',
-            'preferredcodec': format_type,
-            'preferredquality': bitrate,
-        }],
-        'outtmpl': 'downloads/%(title)s.%(ext)s',
-    }
-    if start_time and end_time:
-        ydl_opts['postprocessor_args'] = ['-ss', start_time, '-to', end_time]
+        update_status(download_id, 'Error: ' + str(e))
+        raise
+
+def handle_standard_audio_download(download_id, url, format_type, bitrate, start_time, end_time, user_dir):
     try:
+        ydl_opts = {
+            'format': 'bestaudio',
+            'postprocessors': [{
+                'key': 'FFmpegExtractAudio',
+                'preferredcodec': format_type,
+                'preferredquality': bitrate,
+            }],
+            'outtmpl': os.path.join(user_dir, '%(title)s.%(ext)s'),
+        }
+        if start_time and end_time:
+            ydl_opts['postprocessor_args'] = ['-ss', start_time, '-to', end_time]
+        
         with yt_dlp.YoutubeDL(ydl_opts) as ydl:
             info = ydl.extract_info(url, download=True)
             filename = ydl.prepare_filename(info).replace('.webm', f'.{format_type}').replace('.m4a', f'.{format_type}')
-            response = send_file(filename, as_attachment=True)
-            return response
+            if not os.path.exists(filename):
+                raise Exception(f"File not found: {filename}")
+        
+        update_status(download_id, 'Completed', filename)
     except Exception as e:
-        return f"Error downloading audio: {str(e)}", 500
+        update_status(download_id, 'Error: ' + str(e))
+        raise
 
-def handle_playlist_download(url, format_type, bitrate):
-    """Handle download of a playlist as audio files."""
+def handle_playlist_download(download_id, session_id, url, format_type, bitrate, user_dir):
+    update_status(download_id, 'Downloading')
     try:
-        # First, extract playlist information to get the playlist title
-        with yt_dlp.YoutubeDL({'extract_flat': True}) as ydl:
+        with yt_dlp.YoutubeDL({'extract_flat': True, 'quiet': True}) as ydl:
             playlist_info = ydl.extract_info(url, download=False)
             if not playlist_info:
-                return "Could not retrieve playlist information.", 500
-            
-            playlist_title = playlist_info.get('title', 'playlist')
-            # Clean filename to avoid issues with filesystem
-            playlist_title = re.sub(r'[^\w\-_\. ]', '_', playlist_title)
-    except Exception as e:
-        return f"Error retrieving playlist information: {str(e)}", 500
+                raise Exception("Could not retrieve playlist information")
+            playlist_title = re.sub(r'[^\w\-_\. ]', '_', playlist_info.get('title', 'playlist'))
 
-    # Create a directory for this playlist
-    timestamp = get_timestamp()
-    folder_name = f"{playlist_title}_{timestamp}"
-    playlist_dir = os.path.join('downloads', folder_name)
-    os.makedirs(playlist_dir, exist_ok=True)
+        timestamp = get_timestamp()
+        playlist_dir = os.path.join(user_dir, f"{playlist_title}_{timestamp}")
+        os.makedirs(playlist_dir, exist_ok=True)
 
-    ydl_opts = {
-        'format': 'bestaudio',
-        'postprocessors': [{
-            'key': 'FFmpegExtractAudio',
-            'preferredcodec': format_type,
-            'preferredquality': bitrate,
-        }],
-        'outtmpl': f'downloads/{folder_name}/%(title)s.%(ext)s',
-        'ignoreerrors': True,  # Skip videos that cannot be downloaded
-    }
+        ydl_opts = {
+            'format': 'bestaudio',
+            'postprocessors': [{
+                'key': 'FFmpegExtractAudio',
+                'preferredcodec': 'aac' if format_type == 'aac' else 'vorbis' if format_type == 'ogg' else format_type,
+                'preferredquality': bitrate,
+            }],
+            'outtmpl': f'{playlist_dir}/%(title)s.%(ext)s',
+            'ignoreerrors': True,
+        }
+        if format_type == 'aac':
+            ydl_opts['postprocessor_args'] = ['-f', 'adts']
 
-    try:
-        # Download all videos in the playlist
         with yt_dlp.YoutubeDL(ydl_opts) as ydl:
             ydl.extract_info(url, download=True)
 
-        # Create a zip file of all downloaded audio files
-        zip_path = os.path.join('downloads', f"{folder_name}.zip")
+        zip_path = os.path.join(user_dir, f"{playlist_title}_{timestamp}.zip")
         with zipfile.ZipFile(zip_path, 'w') as zipf:
-            for root, dirs, files in os.walk(playlist_dir):
+            for root, _, files in os.walk(playlist_dir):
                 for file in files:
-                    if file.endswith(f'.{format_type}'):
+                    expected_ext = '.aac' if format_type == 'aac' else '.ogg' if format_type == 'ogg' else f'.{format_type}'
+                    if file.endswith(expected_ext):
                         file_path = os.path.join(root, file)
-                        arcname = os.path.relpath(file_path, 'downloads')
+                        arcname = os.path.relpath(file_path, user_dir)
                         zipf.write(file_path, arcname)
 
-        # Send the zip file
-        response = send_file(zip_path, as_attachment=True)
-        # Clean up files - uncomment to enable cleanup
-        # import shutil
-        # shutil.rmtree(playlist_dir)
-        # os.remove(zip_path)
-        return response
-
+        update_status(download_id, 'Completed', zip_path)
     except Exception as e:
-        return f"Error downloading playlist: {str(e)}", 500
+        update_status(download_id, 'Error: ' + str(e))
+        raise
 
-@app.route('/download_video', methods=['POST'])
-def download_video():
-    url = request.form.get('url')
-    format_type = request.form.get('format')
-    resolution = request.form.get('resolution')
-    mute = request.form.get('mute', 'off') == 'on'
-
-    if not url or not format_type or not resolution:
-        return "Missing required fields. Please fill out all options.", 400
-    if format_type not in VIDEO_FORMATS or resolution not in RESOLUTIONS:
-        return "Invalid format selected.", 400
-    
-    if is_playlist(url):
-        return handle_playlist_video_download(url, format_type, resolution, mute)
-    else:
-        return handle_single_video_download(url, format_type, resolution, mute)
-        
-def handle_single_video_download(url, format_type, resolution, mute):
-    ydl_opts = {
-        'format': f'bestvideo[height<={RESOLUTIONS[resolution]}]+bestaudio/best[height<={RESOLUTIONS[resolution]}]',
-        'merge_output_format': format_type,
-        'outtmpl': 'downloads/%(title)s.%(ext)s',
-    }
-
-    if mute:
-        ydl_opts['format'] = f'bestvideo[height<={RESOLUTIONS[resolution]}]/best[height<={RESOLUTIONS[resolution]}]'
-        ydl_opts['postprocessors'] = [{
-            'key': 'FFmpegVideoConvertor',
-            'preferedformat': format_type,
-        }]
-    
+def handle_single_video_download(download_id, session_id, url, format_type, resolution, mute, user_dir):
+    update_status(download_id, 'Downloading')
     try:
-        os.makedirs('downloads', exist_ok=True)
-        #download and convert the video
+        ydl_opts = {
+            'format': f'bestvideo[height<={RESOLUTIONS[resolution]}]+bestaudio/best[height<={RESOLUTIONS[resolution]}]' if not mute else f'bestvideo[height<={RESOLUTIONS[resolution]}]',
+            'merge_output_format': format_type,
+            'outtmpl': os.path.join(user_dir, '%(title)s.%(ext)s'),
+        }
         with yt_dlp.YoutubeDL(ydl_opts) as ydl:
-            info = ydl.extract_info(url, download=True) # Download and get video info
-            duration = info.get('duration', 0)  # Get video duration in seconds
-
-            # Enforce duration restrictions
-            if resolution == '4k' and duration > 15 * 60:  # 15 minutes
-                return "4K videos are limited to 15 minutes.", 400
-            if resolution == '2k' and duration > 30 * 60:  # 30 minutes
-                return "2K videos are limited to 30 minutes.", 400
-            
+            info = ydl.extract_info(url, download=True)
+            duration = info.get('duration', 0)
+            if resolution == '4k' and duration > 15 * 60:
+                raise Exception("4K videos are limited to 15 minutes")
+            if resolution == '2k' and duration > 30 * 60:
+                raise Exception("2K videos are limited to 30 minutes")
             filename = ydl.prepare_filename(info)
-            response = send_file(filename, as_attachment=True)
-            # os.remove(filename)
-            return response
+            if not os.path.exists(filename):
+                raise Exception(f"File not found: {filename}")
         
+        update_status(download_id, 'Completed', filename)
     except Exception as e:
-        return f"Error downloading video: {str(e)}", 500
+        update_status(download_id, 'Error: ' + str(e))
+        raise
 
-def handle_playlist_video_download(url, format_type, resolution, mute):
-    #ectract plalist info and get playlist title
+def handle_playlist_video_download(download_id, session_id, url, format_type, resolution, mute, user_dir):
+    update_status(download_id, 'Downloading')
     try:
-        with yt_dlp.YoutubeDL({'extract_flat': True}) as ydl:
+        with yt_dlp.YoutubeDL({'extract_flat': True, 'quiet': True}) as ydl:
             playlist_info = ydl.extract_info(url, download=False)
             if not playlist_info:
-                return "Could not retrieve playlist information.", 500
-            
-            playlist_title = playlist_info.get('title', 'playlist')
-            # Clean filename to avoid issues with filesystem
-            playlist_title = re.sub(r'[^\w\-_\. ]', '_', playlist_title)
-    except Exception as e:
-        return f"Error retrieving playlist information: {str(e)}", 500
-    
-    # Create a directory for this playlist
-    timestamp = get_timestamp()
-    folder_name = f"{playlist_title}_{timestamp}"
-    playlist_dir = os.path.join('downloads', folder_name)
-    os.makedirs(playlist_dir, exist_ok=True)
+                raise Exception("Could not retrieve playlist information")
+            playlist_title = re.sub(r'[^\w\-_\. ]', '_', playlist_info.get('title', 'playlist'))
 
-    #configure yt-dlp options
-    ydl_opts = {
-        'format': f'bestvideo[height<={RESOLUTIONS[resolution]}]+bestaudio/best[height<={RESOLUTIONS[resolution]}]',
-        'merge_output_format': format_type,
-        'outtmpl': f'downloads/{folder_name}/%(title)s.%(ext)s',
-        'ignoreerrors': True,  # Skip videos that cannot be downloaded
-    }
+        timestamp = get_timestamp()
+        playlist_dir = os.path.join(user_dir, f"{playlist_title}_{timestamp}")
+        os.makedirs(playlist_dir, exist_ok=True)
 
-    if mute:
-        ydl_opts['format'] = f'bestvideo[height<={RESOLUTIONS[resolution]}]/best[height<={RESOLUTIONS[resolution]}]'
-        ydl_opts['postprocessors'] = [{
-            'key': 'FFmpegVideoConvertor',
-            'preferedformat': format_type,
-        }]
-    
-    try:
-        #download all videos
+        ydl_opts = {
+            'format': f'bestvideo[height<={RESOLUTIONS[resolution]}]+bestaudio/best[height<={RESOLUTIONS[resolution]}]' if not mute else f'bestvideo[height<={RESOLUTIONS[resolution]}]',
+            'merge_output_format': format_type,
+            'outtmpl': f'{playlist_dir}/%(title)s.%(ext)s',
+            'ignoreerrors': True,
+        }
         with yt_dlp.YoutubeDL(ydl_opts) as ydl:
             playlist_items = ydl.extract_info(url, download=True)
-
-            #chec duration constraints
             if resolution in ['4k', '2k'] and playlist_items and 'entries' in playlist_items:
                 for entry in playlist_items['entries']:
                     if entry:
                         duration = entry.get('duration', 0)
-                        if resolution == '4k'  and duration > 15 * 60:
-                            return f"Video '{entry.get('title', 'Unknown')}' exceeds the 15-minute limit for 4K resolution.", 400
+                        if resolution == '4k' and duration > 15 * 60:
+                            raise Exception(f"Video '{entry.get('title', 'Unknown')}' exceeds 15-minute limit for 4K")
                         if resolution == '2k' and duration > 30 * 60:
-                            return f"Video '{entry.get('title', 'Unknown')}' exceeds the 30-minute limit for 2K resolution.", 400
-            
-        # Create a zip file of all downloaded video files
-        zip_path = os.path.join('downloads', f"{folder_name}.zip")
+                            raise Exception(f"Video '{entry.get('title', 'Unknown')}' exceeds 30-minute limit for 2K")
+
+        zip_path = os.path.join(user_dir, f"{playlist_title}_{timestamp}.zip")
         with zipfile.ZipFile(zip_path, 'w') as zipf:
-            for root, dirs, files in os.walk(playlist_dir):
+            for root, _, files in os.walk(playlist_dir):
                 for file in files:
                     if file.endswith(f'.{format_type}'):
                         file_path = os.path.join(root, file)
-                        arcname = os.path.relpath(file_path, 'downloads')
+                        arcname = os.path.relpath(file_path, user_dir)
                         zipf.write(file_path, arcname)
-        
-        #send the zip file
-        response = send_file(zip_path, as_attachment=True)
-        # Clean up files - uncomment to enable cleanup
-        # import shutil
-        # shutil.rmtree(playlist_dir)
-        # os.remove(zip_path)
-        return response
-    
+
+        update_status(download_id, 'Completed', zip_path)
     except Exception as e:
-        return f"Error downloading playlist: {str(e)}", 500
-    
+        update_status(download_id, 'Error: ' + str(e))
+        raise
+
+@app.route('/status/<download_id>')
+def check_status(download_id):
+    cleanup_expired_sessions()
+    with sqlite3.connect(DB_PATH) as conn:
+        cursor = conn.execute('SELECT status, file_path FROM downloads WHERE download_id = ?', (download_id,))
+        result = cursor.fetchone()
+        if result:
+            status, file_path = result
+            return jsonify({'download_id': download_id, 'status': status, 'file_path': file_path})
+        return jsonify({'error': 'Download not found'}), 404
+
+@app.route('/download/<download_id>')
+def download_file(download_id):
+    with sqlite3.connect(DB_PATH) as conn:
+        cursor = conn.execute('SELECT file_path FROM downloads WHERE download_id = ?', (download_id,))
+        result = cursor.fetchone()
+        if result and result[0] and os.path.exists(result[0]):
+            return send_file(result[0], as_attachment=True)
+        return jsonify({'error': 'File not found'}), 404
+
 if __name__ == '__main__':
     app.run(debug=True, host='0.0.0.0', port=5000)
