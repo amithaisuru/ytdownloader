@@ -3,5 +3,7 @@ __pycache__/app.cpython-310.pyc
 /downloads
 *.pyc
 /flask_session
-downloads.db
 /venv
+/flask_session
+/__pycache__
+*.db
