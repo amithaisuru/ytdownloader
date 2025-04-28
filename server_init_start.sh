@@ -1,5 +1,8 @@
 #!/bin/bash
 
+working_directory=$(pwd)
+echo "working directory detected: $working_directory"
+
 # Install system dependencies
 sudo apt update
 sudo apt install -y python3 python3-venv ffmpeg
@@ -14,5 +17,15 @@ source ./venv/bin/activate
 pip install --upgrade pip
 pip install -r requirements.txt
 
+#Install supervisord (crash autorestarting)
+sudo apt install supervisor
+
+#configure supervisord
+mkdir -p logs
+source supervisord_utils/configure_supervisord.sh "$working_directory"
+
 # Run the application
-python3 app.py
+sudo supervisorctl reread
+sudo supervisorctl update
+sudo supervisorctl start youtube_downloader
+sudo supervisorctl status youtube_downloader

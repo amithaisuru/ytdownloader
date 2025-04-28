@@ -3,12 +3,15 @@ import os
 import sqlite3
 import threading
 
+from config import SESSION_LIFETIME
+
 from init_db import DB_PATH
 
 db_lock = threading.Lock()
 
 def cleanup_expired_sessions():
-    expiration = datetime.datetime.now() - datetime.timedelta(seconds=30)
+    expiration = datetime.datetime.now() - datetime.timedelta(seconds=SESSION_LIFETIME)
+
     with db_lock:
         with sqlite3.connect(DB_PATH) as conn:
             cursor = conn.execute(
@@ -42,7 +45,8 @@ def cleanup_expired_sessions():
         for session_file in glob.glob(os.path.join(session_dir, 'sess_*')):
             try:
                 file_mtime = os.path.getmtime(session_file)
-                if (datetime.datetime.now() - datetime.datetime.fromtimestamp(file_mtime)).total_seconds() > 30:
+                if (datetime.datetime.now() - datetime.datetime.fromtimestamp(file_mtime)).total_seconds() > SESSION_LIFETIME:
+
                     session_id = None
                     with open(session_file, 'rb') as f:
                         import pickle
@@ -56,3 +60,12 @@ def cleanup_expired_sessions():
                             shutil.rmtree(session_dir)
             except Exception:
                 pass
+
+def get_safe_thread_count():
+    # Check environment variable for override
+    env_thread_count = os.environ.get('THREAD_COUNT')
+    if env_thread_count and env_thread_count.isdigit():
+        return max(1, min(int(env_thread_count), 16))  # Cap at 16 for shared hosting
+    # Default to 2 threads for shared hosting
+    return 2
+

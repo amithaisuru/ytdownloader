@@ -5,61 +5,105 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Youtube Downloader</title>
     <link rel="stylesheet" href="{{ url_for('static', filename='style.css') }}">
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.5.1/css/all.min.css">
+    <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap">
 </head>
 <body>
-    <h2>Youtube Downloader</h2>
-    <div class="tab">
-        <button class="tablinks" onclick="openTab(event, 'Audio')">Youtube to Audio</button>
-        <button class="tablinks" onclick="openTab(event, 'Video')">Youtube to Video</button>
-    </div>
+    <div class="container">
+        <div class="downloader-app">
+            <div class="header">
+                <h2><i class="fas fa-download"></i> Youtube Downloader</h2>
+            </div>
+            
+            <div class="tab">
+                <button class="tablinks" onclick="openTab(event, 'Audio')"><i class="fas fa-music"></i> Youtube to Audio</button>
+                <button class="tablinks" onclick="openTab(event, 'Video')"><i class="fas fa-video"></i> Youtube to Video</button>
+            </div>
 
-    <!-- audio section -->
-    <div id="Audio" class="tabcontent">
-        <h3>Audio Download</h3>
-        <form id="audio-form">
-            <label for="url_audio">Youtube URL:</label><br>
-            <input type="text" id="url_audio" name="url" placeholder="Enter URL Here" required><br><br>
-            <label for="format_audio">Format:</label>
-            <select name="format" id="format_audio" onchange="updateBitrate()">
-                {% for format in audio_formats %}
-                    <option value="{{ format }}">{{ format|upper }}</option>
-                {% endfor %}
-            </select><br><br>
-            <label for="bitrate">Bitrate:</label>
-            <select name="bitrate" id="bitrate"></select><br><br>
-            <label for="start_time">Start Time (e.g., 00:00):</label>
-            <input type="text" id="start_time" name="start_time" placeholder="Optional"><br><br>
-            <label for="end_time">End Time (e.g., 01:30):</label>
-            <input type="text" id="end_time" name="end_time" placeholder="Optional"><br><br>
-            <input type="submit" value="Download Audio">
-        </form>
-        <div id="audio-status"></div>
-    </div>
+            <!-- audio section -->
+            <div id="Audio" class="tabcontent">
+                <form id="audio-form">
+                    <div class="form-group">
+                        <input type="text" id="url_audio" name="url" placeholder="Enter Youtube URL: Video/Playlist" required>
+                    </div>
+                    
+                    <div class="form-row">
+                        <div class="form-group">
+                            <label for="format_audio">Format:</label>
+                            <select name="format" id="format_audio" onchange="updateBitrate()">
+                                {% for format in audio_formats %}
+                                    <option value="{{ format }}">{{ format|upper }}</option>
+                                {% endfor %}
+                            </select>
+                        </div>
+                        
+                        <div class="form-group">
+                            <label for="bitrate">Bitrate:</label>
+                            <select name="bitrate" id="bitrate"></select>
+                        </div>
+                    </div>
+                    
+                    <div class="form-row">
+                        <div class="form-group">
+                            <label for="start_time">Start Time (e.g., 00:00):</label>
+                            <input type="text" id="start_time" name="start_time" placeholder="Optional">
+                        </div>
+                        
+                        <div class="form-group">
+                            <label for="end_time">End Time (e.g., 01:30):</label>
+                            <input type="text" id="end_time" name="end_time" placeholder="Optional">
+                        </div>
+                    </div>
+                    
+                    <div class="form-submit">
+                        <button type="submit" class="btn-convert"><i class="fas fa-sync-alt"></i> Convert Audio</button>
+                        <a href="#" class="btn-download" style="display: none;"><i class="fas fa-download"></i> Download File</a>
+                    </div>
+                </form>
+            </div>
 
-    <!-- video section -->
-    <div id="Video" class="tabcontent">
-        <h3>Video Downloader</h3>
-        <form id="video-form">
-            <label for="url_video">Youtube URL:</label><br>
-            <input type="text" id="url_video" name="url" placeholder="Enter URL Here" required><br><br>
-            <label for="format_video">Format:</label>
-            <select name="format" id="format_video">
-                {% for format in video_formats %}
-                    <option value="{{ format }}">{{ format|upper }}</option>
-                {% endfor %}
-            </select><br><br>
-            <label for="resolution">Resolution:</label>
-            <select id="resolution" name="resolution">
-                {% for res in resolutions %}
-                    <option value="{{ res }}">{{ res|upper }}</option>
-                {% endfor %}
-            </select><br><br>
-            <label for="mute">Mute Video:</label>
-            <input type="checkbox" id="mute" name="mute"><br><br>
-            <input type="submit" value="Download Video">
-        </form>
-        <div id="video-status"></div>
+            <!-- video section -->
+            <div id="Video" class="tabcontent">
+                <form id="video-form">
+                    <div class="form-group">
+                        <input type="text" id="url_video" name="url" placeholder="Enter Youtube URL: Video/Playlist" required>
+                    </div>
+                    
+                    <div class="form-row">
+                        <div class="form-group">
+                            <label for="format_video">Format:</label>
+                            <select name="format" id="format_video">
+                                {% for format in video_formats %}
+                                    <option value="{{ format }}">{{ format|upper }}</option>
+                                {% endfor %}
+                            </select>
+                        </div>
+                        
+                        <div class="form-group">
+                            <label for="resolution">Resolution:</label>
+                            <select id="resolution" name="resolution">
+                                {% for res in resolutions %}
+                                    <option value="{{ res }}">{{ res|upper }}</option>
+                                {% endfor %}
+                            </select>
+                        </div>
+                    </div>
+                    
+                    <div class="form-group checkbox-group">
+                        <input type="checkbox" id="mute" name="mute">
+                        <label for="mute">Mute Video</label>
+                    </div>
+                    
+                    <div class="form-submit">
+                        <button type="submit" class="btn-convert"><i class="fas fa-sync-alt"></i> Convert Video</button>
+                        <a href="#" class="btn-download" style="display: none;"><i class="fas fa-download"></i> Download File</a>
+                    </div>
+                </form>
+            </div>
+        </div>
     </div>
+    
+    <div id="toast-container" class="toast-container"></div>
 
     <script src="{{ url_for('static', filename='script.js') }}"></script>
 </body>

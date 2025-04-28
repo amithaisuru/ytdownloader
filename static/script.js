@@ -1,4 +1,3 @@
-// static/script.js
 function openTab(evt, tabName) {
     var i, tabContent, tabLinks;
     tabContent = document.getElementsByClassName("tabcontent");
@@ -31,22 +30,67 @@ function updateBitrate() {
     });
 }
 
-function checkStatus(downloadId, statusElement) {
+function showToast(message, type = 'info') {
+    const toastContainer = document.getElementById('toast-container');
+    const toast = document.createElement('div');
+    toast.className = `toast ${type ? 'toast-' + type : ''}`;
+    
+    toast.innerHTML = `
+        <div class="toast-content">${message}</div>
+        <button class="toast-close" onclick="this.parentElement.remove()">×</button>
+    `;
+    
+    toastContainer.appendChild(toast);
+    
+    setTimeout(() => {
+        toast.remove();
+    }, 5000);
+}
+
+function resetButton(button, downloadLink, formType) {
+    button.style.display = 'inline-flex';
+    button.className = 'btn-convert';
+    button.innerHTML = `<i class="fas fa-sync-alt"></i> Convert ${formType}`;
+    button.disabled = false;
+    button.type = 'submit';
+    downloadLink.style.display = 'none';
+    downloadLink.href = '#';
+}
+
+function checkStatus(downloadId, button, downloadLink, formType) {
     fetch(`/status/${downloadId}`)
         .then(response => response.json())
         .then(data => {
-            statusElement.innerHTML = `<p style="color: blue;">Download ID: ${downloadId}, Status: ${data.status}</p>`;
+            button.className = 'btn-status';
+            button.innerHTML = `<i class="fas fa-spinner fa-spin"></i> ${data.status}...`;
+            button.disabled = true;
+            
             if (data.status === 'Completed' && data.file_path) {
-                statusElement.innerHTML = `<p style="color: blue;">Download ID: ${downloadId}, Status: ${data.status}</p>` +
-                                         `<a href="/download/${downloadId}" style="color: green;">Download File</a>`;
+                button.style.display = 'none';
+                downloadLink.style.display = 'inline-flex';
+                downloadLink.href = `/download/${downloadId}`;
+                downloadLink.onclick = (e) => {
+                    e.preventDefault();
+                    window.location.href = downloadLink.href;
+                    resetButton(button, downloadLink, formType);
+                };
+                showToast('Your download is ready!', 'success');
             } else if (data.status.includes('Error')) {
-                statusElement.innerHTML = `<p style="color: red;">Download ID: ${downloadId}, ${data.status}</p>`;
+                button.className = 'status-error';
+                button.innerHTML = `<i class="fas fa-exclamation-circle"></i> ${data.status}`;
+                button.disabled = true;
+                showToast(data.status, 'error');
+                setTimeout(() => resetButton(button, downloadLink, formType), 5000);
             } else {
-                setTimeout(() => checkStatus(downloadId, statusElement), 2000);
+                setTimeout(() => checkStatus(downloadId, button, downloadLink, formType), 2000);
             }
         })
         .catch(() => {
-            statusElement.innerHTML = '<p style="color: red;">Error checking status</p>';
+            button.className = 'status-error';
+            button.innerHTML = `<i class="fas fa-exclamation-circle"></i> Error checking status`;
+            button.disabled = true;
+            showToast('Error checking download status', 'error');
+            setTimeout(() => resetButton(button, downloadLink, formType), 5000);
         });
 }
 
@@ -57,12 +101,14 @@ document.addEventListener("DOMContentLoaded", function() {
     document.getElementById('audio-form').addEventListener('submit', function(e) {
         e.preventDefault();
         const formData = new FormData(this);
-        const statusDiv = document.getElementById('audio-status');
+        const button = this.querySelector('.btn-convert');
+        const downloadLink = this.querySelector('.btn-download');
         
-        // Create a new status element for this download
-        const statusElement = document.createElement('div');
-        statusElement.innerHTML = '<p style="color: blue;">Submitting...</p>';
-        statusDiv.appendChild(statusElement);
+        button.className = 'btn-status';
+        button.innerHTML = '<i class="fas fa-spinner fa-spin"></i> Submitting...';
+        button.disabled = true;
+        downloadLink.style.display = 'none';
+
 
         fetch('/download_audio', {
             method: 'POST',
@@ -71,26 +117,35 @@ document.addEventListener("DOMContentLoaded", function() {
         .then(response => response.json())
         .then(data => {
             if (data.error) {
-                statusElement.innerHTML = `<p style="color: red;">${data.error}</p>`;
+                button.className = 'status-error';
+                button.innerHTML = `<i class="fas fa-exclamation-circle"></i> ${data.error}`;
+                button.disabled = true;
+                showToast(data.error, 'error');
+                setTimeout(() => resetButton(button, downloadLink, 'Audio'), 5000);
             } else {
-                statusElement.innerHTML = `<p style="color: blue;">Download ID: ${data.download_id}, Status: ${data.status}</p>`;
-                checkStatus(data.download_id, statusElement);
+                checkStatus(data.download_id, button, downloadLink, 'Audio');
             }
         })
         .catch(() => {
-            statusElement.innerHTML = '<p style="color: red;">Error submitting request</p>';
+            button.className = 'status-error';
+            button.innerHTML = '<i class="fas fa-exclamation-circle"></i> Error submitting request';
+            button.disabled = true;
+            showToast('Error submitting request', 'error');
+            setTimeout(() => resetButton(button, downloadLink, 'Audio'), 5000);
+
         });
     });
 
     document.getElementById('video-form').addEventListener('submit', function(e) {
         e.preventDefault();
         const formData = new FormData(this);
-        const statusDiv = document.getElementById('video-status');
+        const button = this.querySelector('.btn-convert');
+        const downloadLink = this.querySelector('.btn-download');
         
-        // Create a new status element for this download
-        const statusElement = document.createElement('div');
-        statusElement.innerHTML = '<p style="color: blue;">Submitting...</p>';
-        statusDiv.appendChild(statusElement);
+        button.className = 'btn-status';
+        button.innerHTML = '<i class="fas fa-spinner fa-spin"></i> Submitting...';
+        button.disabled = true;
+        downloadLink.style.display = 'none';
 
         fetch('/download_video', {
             method: 'POST',
@@ -99,14 +154,21 @@ document.addEventListener("DOMContentLoaded", function() {
         .then(response => response.json())
         .then(data => {
             if (data.error) {
-                statusElement.innerHTML = `<p style="color: red;">${data.error}</p>`;
+                button.className = 'status-error';
+                button.innerHTML = `<i class="fas fa-exclamation-circle"></i> ${data.error}`;
+                button.disabled = true;
+                showToast(data.error, 'error');
+                setTimeout(() => resetButton(button, downloadLink, 'Video'), 5000);
             } else {
-                statusElement.innerHTML = `<p style="color: blue;">Download ID: ${data.download_id}, Status: ${data.status}</p>`;
-                checkStatus(data.download_id, statusElement);
+                checkStatus(data.download_id, button, downloadLink, 'Video');
             }
         })
         .catch(() => {
-            statusElement.innerHTML = '<p style="color: red;">Error submitting request</p>';
+            button.className = 'status-error';
+            button.innerHTML = '<i class="fas fa-exclamation-circle"></i> Error submitting request';
+            button.disabled = true;
+            showToast('Error submitting request', 'error');
+            setTimeout(() => resetButton(button, downloadLink, 'Video'), 5000);
         });
     });
 });
