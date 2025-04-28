@@ -5,3 +5,4 @@ this command install dependacies and start the server
 afterward
 starting the server: source server_start.sh
 stopping server: source server_stop.sh
+

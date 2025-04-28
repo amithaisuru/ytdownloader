@@ -109,6 +109,7 @@ document.addEventListener("DOMContentLoaded", function() {
         button.disabled = true;
         downloadLink.style.display = 'none';
 
+
         fetch('/download_audio', {
             method: 'POST',
             body: formData
@@ -131,6 +132,7 @@ document.addEventListener("DOMContentLoaded", function() {
             button.disabled = true;
             showToast('Error submitting request', 'error');
             setTimeout(() => resetButton(button, downloadLink, 'Audio'), 5000);
+
         });
     });
 

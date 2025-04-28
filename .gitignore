@@ -1,6 +1,8 @@
 __pycache__/app.cpython-310.pyc
 *.mp3
 /downloads
+*.pyc
+/flask_session
 /venv
 /flask_session
 /__pycache__
