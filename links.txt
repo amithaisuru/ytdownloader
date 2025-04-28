@@ -1,4 +1,17 @@
-video
-https://www.youtube.com/watch?v=0tE7hXz3kt0
+4k(1 minute)
+https://www.youtube.com/watch?v=2PuFyjAs7JA
+
+2k (11 seconds)
+https://www.youtube.com/watch?v=2PuFyjAs7JA
+
+4k (35 minutes)
+https://www.youtube.com/watch?v=SEssIU0tcuQ
+
+playlist
+https://youtube.com/playlist?list=PL8XAHWxyzldaemDH7MZrvtnjYxkxD5zj8&si=qS6YukAYMXZc3EHC
+
 short
-https://www.youtube.com/shorts/MILv04Pl6oY
+https://www.youtube.com/shorts/M0GPJ1cXMbY
+
+normal video (max resolution availble on youtube is 1080p)
+https://www.youtube.com/watch?v=HIN-gydRcIA

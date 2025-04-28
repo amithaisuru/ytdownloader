@@ -1,0 +1,7 @@
+--------for the first time-----------
+source server_init_start.sh 
+this command install dependacies and start the server
+
+afterward
+starting the server: source server_start.sh
+stopping server: source server_stop.sh
